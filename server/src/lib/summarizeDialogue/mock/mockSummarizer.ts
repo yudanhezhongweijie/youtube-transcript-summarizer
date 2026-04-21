@@ -1,5 +1,5 @@
 /**
- * Fixed sample dialogue summary for `USE_MOCK=1` and chunk-splitting helpers
+ * Fixed sample dialogue summary for mock SSE (magic key + empty URL) and chunk-splitting helpers
  * (mirrors how streamed JSON arrives without calling Gemini).
  */
 import {

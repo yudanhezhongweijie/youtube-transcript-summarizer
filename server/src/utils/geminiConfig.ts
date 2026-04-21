@@ -15,6 +15,12 @@ export function normalizeGeminiApiKey(key: string): string {
 }
 
 /**
+ * When the client sends this exact key (request body, after {@link normalizeGeminiApiKey}) and leaves the
+ * video URL empty, `/api/process/stream` runs the built-in mock SSE (no Gemini, no YouTube fetch).
+ */
+export const MOCK_SESSION_API_KEY = "54321";
+
+/**
  * Resolved model id for `getGenerativeModel({ model })`.
  * Uses `GEMINI_MODEL` when set and non-empty after trim; otherwise {@link DEFAULT_GEMINI_MODEL}.
  * (`??` alone does not treat `""` as missing — callers must use this helper.)

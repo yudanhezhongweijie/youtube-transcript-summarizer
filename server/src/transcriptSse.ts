@@ -4,6 +4,7 @@ import {
   parsePartialDialogueSummaryJson,
   type ChatMessage,
 } from "./lib/dialogueSummary";
+import { mockDialogueSummary } from "./lib/summarizeDialogue/mock/mockSummarizer";
 import { summarizeDialogue } from "./lib/summarizeDialogue";
 import { sseWrite } from "./utils/sse";
 import {
@@ -46,7 +47,7 @@ export async function writeLiveTranscriptSse(
   try {
     fetched = await fetchYoutubeTranscriptPlain(youtubeWatchUrl);
   } catch (e) {
-    throw new Error(transcriptFetchErrorMessage(e));
+    throw new Error(await transcriptFetchErrorMessage(e));
   }
   if (!fetched.plainText || fetched.segmentCount === 0) {
     throw new Error("No transcript returned for this video.");
@@ -131,4 +132,82 @@ export async function pipeLiveTranscriptToSse(
     ctx.geminiApiKey,
     ctx.shouldContinue,
   );
+}
+
+const MOCK_SSE_VIDEO_ID = "mock";
+
+/**
+ * Demo SSE: no YouTube fetch, no Gemini — streams chunked sample dialogue JSON (trigger: empty URL + body key 54321).
+ */
+export async function writeMockDialogueSse(
+  res: Response,
+  shouldContinue: () => boolean = () => true,
+): Promise<void> {
+  if (!shouldContinue()) return;
+
+  sseWrite(res, "init", { videoId: MOCK_SSE_VIDEO_ID });
+  if (!shouldContinue()) return;
+
+  const status: ChatMessage = {
+    speaker: "Status",
+    text: "Mock session (empty URL + key 54321). Streaming sample dialogue…",
+  };
+  sseWrite(res, "message", status);
+  if (!shouldContinue()) return;
+
+  let streamJsonBuffer = "";
+  let emittedSummaryCount = 0;
+
+  const emitNewMessagesFromStreamBuffer = (): void => {
+    const parsed = parsePartialDialogueSummaryJson(streamJsonBuffer);
+    while (emittedSummaryCount < parsed.length && shouldContinue()) {
+      sseWrite(res, "message", parsed[emittedSummaryCount]);
+      emittedSummaryCount++;
+    }
+  };
+
+  let summaryMessages: ChatMessage[];
+  try {
+    summaryMessages = await mockDialogueSummary({
+      onTextChunk: (delta) => {
+        if (!delta || !shouldContinue()) return;
+        streamJsonBuffer += delta;
+        emitNewMessagesFromStreamBuffer();
+      },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log("mockDialogueSummary failed", { error: msg });
+    throw e;
+  }
+
+  if (!shouldContinue()) return;
+
+  log("SSE mock: streaming summary messages", {
+    videoId: MOCK_SSE_VIDEO_ID,
+    messageCount: summaryMessages.length,
+    streamedDuringGeneration: emittedSummaryCount,
+  });
+
+  for (let i = emittedSummaryCount; i < summaryMessages.length; i++) {
+    if (!shouldContinue()) return;
+    sseWrite(res, "message", summaryMessages[i]);
+    if (i < summaryMessages.length - 1) {
+      await delayMs(SSE_MESSAGE_GAP_MS);
+    }
+  }
+
+  if (!shouldContinue()) return;
+  sseWrite(res, "done", {
+    videoId: MOCK_SSE_VIDEO_ID,
+    messageCount: 2 + summaryMessages.length,
+  });
+}
+
+export async function pipeMockDialogueToSse(
+  res: Response,
+  ctx: { requestId: string; shouldContinue: () => boolean },
+): Promise<void> {
+  log("mock dialogue SSE", { requestId: ctx.requestId, videoId: MOCK_SSE_VIDEO_ID });
+  await writeMockDialogueSse(res, ctx.shouldContinue);
 }

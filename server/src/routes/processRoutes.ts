@@ -2,10 +2,12 @@ import type { Express } from "express";
 import { log } from "../utils/logger";
 import { extractVideoId, watchUrlForVideoId } from "../utils/videoId";
 import { initSse, safeResEnd, sseWrite } from "../utils/sse";
-import { pipeLiveTranscriptToSse } from "../transcriptSse";
+import { pipeLiveTranscriptToSse, pipeMockDialogueToSse } from "../transcriptSse";
 import {
   invalidGeminiApiKeyHint,
   isGeminiApiKeyInvalidError,
+  MOCK_SESSION_API_KEY,
+  normalizeGeminiApiKey,
   resolveGeminiApiKeyWithSource,
   resolveGeminiModel,
 } from "../utils/geminiConfig";
@@ -37,6 +39,35 @@ export function registerProcessRoutes(app: Express): void {
       !clientDisconnected && !res.writableEnded;
 
     const trimmedUrl = (videoUrl ?? "").trim();
+    const bodyKeyNorm = normalizeGeminiApiKey(geminiApiKey ?? "");
+    const isMockSession =
+      trimmedUrl === "" && bodyKeyNorm === MOCK_SESSION_API_KEY;
+
+    if (isMockSession) {
+      activeStreamCancelByRequestId.set(rid, markDisconnected);
+      initSse(res);
+      try {
+        log(`POST /api/process/stream`, {
+          requestId: rid,
+          mockSession: true,
+          videoId: "mock",
+        });
+        await pipeMockDialogueToSse(res, { requestId: rid, shouldContinue });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`POST /api/process/stream FAILED`, { requestId: rid, error: msg });
+        try {
+          if (!res.writableEnded) sseWrite(res, "error", { message: msg });
+        } catch {
+          /* headers may be closed */
+        }
+      } finally {
+        activeStreamCancelByRequestId.delete(rid);
+        safeResEnd(res);
+      }
+      return;
+    }
+
     const videoIdFromUrl = trimmedUrl ? extractVideoId(trimmedUrl) : null;
     const { key: normalizedGeminiKey, source: geminiKeySource } =
       resolveGeminiApiKeyWithSource(geminiApiKey);

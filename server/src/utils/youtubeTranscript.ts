@@ -1,14 +1,27 @@
-import {
-  fetchTranscript,
-  YoutubeTranscriptDisabledError,
-  YoutubeTranscriptError,
-  YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptNotAvailableLanguageError,
-  YoutubeTranscriptTooManyRequestError,
-  YoutubeTranscriptVideoUnavailableError,
-} from "youtube-transcript";
-
 import { log } from "./logger";
+
+/**
+ * The package sets `"type": "module"` but `main` points at a CJS bundle; `require()` then fails at
+ * runtime ("exports is not defined in ES module scope"). Load the ESM build explicitly.
+ * @see https://github.com/Kakulukian/youtube-transcript
+ */
+const YT_ESM = "youtube-transcript/dist/youtube-transcript.esm.js" as const;
+
+type YtModule = typeof import("youtube-transcript");
+
+/** `tsc` with `module: CommonJS` rewrites `import()` to `require()` — breaks this ESM-only file. */
+function dynamicImport<T>(specifier: string): Promise<T> {
+  return new Function("s", "return import(s)")(specifier) as Promise<T>;
+}
+
+let ytCache: YtModule | null = null;
+
+async function getYoutubeTranscript(): Promise<YtModule> {
+  if (!ytCache) {
+    ytCache = await dynamicImport<YtModule>(YT_ESM);
+  }
+  return ytCache;
+}
 
 /** Result of one caption fetch (plain text stays server-side until Gemini). */
 export type YoutubeTranscriptFetchResult = {
@@ -24,6 +37,7 @@ export type YoutubeTranscriptFetchResult = {
 export async function fetchYoutubeTranscriptPlain(
   videoUrlOrId: string,
 ): Promise<YoutubeTranscriptFetchResult> {
+  const { fetchTranscript } = await getYoutubeTranscript();
   const segments = await fetchTranscript(videoUrlOrId);
   const plainText = segments.map((s) => s.text).join(" ");
   const totalCueChars = segments.reduce((n, s) => n + s.text.length, 0);
@@ -42,7 +56,18 @@ export async function fetchYoutubeTranscriptPlain(
 }
 
 /** Map `youtube-transcript` errors to a short client-facing message. */
-export function transcriptFetchErrorMessage(err: unknown): string {
+export async function transcriptFetchErrorMessage(
+  err: unknown,
+): Promise<string> {
+  const {
+    YoutubeTranscriptTooManyRequestError,
+    YoutubeTranscriptVideoUnavailableError,
+    YoutubeTranscriptDisabledError,
+    YoutubeTranscriptNotAvailableError,
+    YoutubeTranscriptNotAvailableLanguageError,
+    YoutubeTranscriptError,
+  } = await getYoutubeTranscript();
+
   if (err instanceof YoutubeTranscriptTooManyRequestError) {
     return "YouTube is rate-limiting transcript requests. Try again shortly.";
   }

@@ -31,9 +31,11 @@ For **local dev**, the server loads a **`.env` file at the repository root** (`n
    |----------|---------|
    | `GEMINI_API_KEY` | Your Gemini API key. Required for live summarization unless you rely on the key field in the web UI (see below). |
    | `GEMINI_MODEL` | Model id (default in `.env.example` is `gemini-flash-latest`). Empty/unset falls back to `gemini-flash-latest`. |
-   | `USE_MOCK` | Set to `1` (or any non-empty value) to use the built-in mock summarizer **without** calling Gemini — useful for UI and SSE testing. |
+   | (no env for mock) | **Mock SSE:** leave the video URL empty and send API key **`54321`** in the request body (see `/api/process/stream`). No Gemini or YouTube fetch. |
 
 **API key resolution:** If `GEMINI_API_KEY` is set in `.env`, it **wins** over the key typed in the browser. To test with a key from the UI only, leave `GEMINI_API_KEY` unset in `.env`.
+
+**Client → API URL (hosted UI):** For a static build served on a **different** host than the API, set **`VITE_API_BASE_URL`** to the API origin when building the client (e.g. on Render Static Site). Omit it for local `npm run dev:client` (Vite proxies `/api`).
 
 ## Run the app
 
@@ -70,7 +72,19 @@ Build the client and serve the static output with any static host, or `npm run p
 
 ### Deploy both frontend and backend on Render
 
-You use **two services** in one Render project, both from the **same Git repo**: a **Web Service** (Node API) and a **Static Site** (Vite build). The API and the static HTML are on **different URLs**, so the client build must include your API’s public URL via **`VITE_API_BASE_URL`** (see step 11).
+You can use **two services** in one Render project, both from the **same Git repo**: a **Web Service** (Node API) and a **Static Site** (Vite build).
+
+**Different URLs (typical):** the static site is served from one origin (e.g. `https://youtube-transcript-web.onrender.com`) and the API from another (e.g. `https://youtube-transcript-api.onrender.com`). Relative `fetch("/api/...")` would call the **static host**, which does not run Express — you get an empty body or a SPA fallback, not SSE.
+
+**Fix:** set a **build-time** env var on the **Static Site** service so the client bundle calls the API origin explicitly:
+
+| Variable | Example | When |
+|----------|---------|------|
+| `VITE_API_BASE_URL` | `https://youtube-transcript-api.onrender.com` | No trailing slash. Required when UI and API are on different Render URLs. |
+
+After changing `VITE_API_BASE_URL`, **rebuild** the static site (the value is baked in at `npm run build`). Locally, leave it unset: Vite’s dev proxy still forwards `/api` to the API (`client/vite.config.ts`).
+
+**Alternative:** keep `VITE_API_BASE_URL` unset and configure **rewrites** so `/api/*` on the static origin is proxied to your Web Service (Render redirects/rewrites or a CDN). The env var is usually simpler.
 
 **Before you start**
 
@@ -99,7 +113,7 @@ You use **two services** in one Render project, both from the **same Git repo**:
     |-----|--------|
     | `GEMINI_API_KEY` | Your Gemini key, unless users rely only on the in-app key field |
     | `GEMINI_MODEL` | e.g. `gemini-flash-latest` |
-    | `USE_MOCK` | Omit for real Gemini; set to `1` if you only want the mock summarizer |
+    | (mock) | Use empty URL + body key `54321` from the app to test SSE without Gemini (not an env var). |
 
     Do **not** set `PORT` yourself — Render injects it.
 
@@ -124,16 +138,9 @@ You use **two services** in one Render project, both from the **same Git repo**:
     `npm ci && npm run build --workspace=client`
 19. **Publish directory:**  
     `client/dist`
-20. Open **Environment** for this Static Site and add:
-
-    | Key | Value |
-    |-----|--------|
-    | `VITE_API_BASE_URL` | Exactly your API’s origin, e.g. `https://youtube-transcript-api.onrender.com` — **no path, no trailing slash** |
-
-    Vite reads this **when the client is built**. It is not read at runtime from the browser.
-
-21. Click **Create Static Site** and wait for the build to finish.
-22. Open the **Static Site URL** Render shows you; that is your app. Submit a video URL and confirm summaries stream.
+20. Open **Environment** for this Static Site and add **`VITE_API_BASE_URL`** = your **Web Service** URL from step 12 (e.g. `https://youtube-transcript-api.onrender.com`, **no** trailing slash). This is required so the built JS calls the API host instead of the static host for `/api/...`.
+21. Click **Create Static Site** (or save env and **Manual Deploy** if you add `VITE_API_BASE_URL` after the first failed build).
+22. Open the **Static Site URL**; submit a video URL and confirm summaries stream. If you change the API URL later, update `VITE_API_BASE_URL` and redeploy the static site.
 
 ---
 
@@ -141,18 +148,19 @@ You use **two services** in one Render project, both from the **same Git repo**:
 
 - **`npm error Exit handler never called` during build:** (1) Ensure **`package-lock.json` was generated against the public registry**, not a private mirror (e.g. corporate Artifactory). This repo includes **`.npmrc`** with `registry=https://registry.npmjs.org/` so `npm install` stays portable; if your lockfile pointed at an internal host, regenerate it (`rm package-lock.json && npm install`) and commit. (2) Very new **Node** (e.g. 25.x) can also trigger npm bugs — this repo pins **Node 22** via `.nvmrc` and `engines`. Optional: set **`NODE_VERSION`**=`22` on the service ([Render Node versions](https://render.com/docs/node-version)).
 - **Web Service root directory:** use the **repository root** (leave “Root Directory” empty) so `npm install` runs the **workspace** and `npm run build` builds both `client` and `server`. If you only pointed Render at `server/`, use `server/.nvmrc` and a build that matches that layout.
+- **Static Site build: `Cannot find module @rollup/rollup-linux-x64-gnu`:** Rollup ships platform-specific optional binaries. A lockfile produced on macOS can leave Linux CI without that package when using `npm ci`. This repo lists **`@rollup/rollup-linux-x64-gnu`** under **`client` → `optionalDependencies`** (version matches Rollup) so the Linux binary is in the lockfile. After upgrading Vite, align that version with `rollup` in `package-lock.json` if the build fails again.
 - **First request after idle is very slow:** on the free Web Service tier the API **sleeps**; wait ~30–60s and retry, or upgrade the instance.
-- **UI loads but API errors / network errors:** confirm `VITE_API_BASE_URL` matches the **Web Service** URL (scheme `https`, no trailing slash) and **redeploy** the Static Site after changing env vars (the value is baked into the JS bundle at build time).
+- **UI loads but empty stream / network errors:** set **`VITE_API_BASE_URL`** on the Static Site to the API’s `https://…` origin and redeploy, or configure an edge proxy for `/api` (see “Deploy both frontend and backend on Render” above).
 - **CORS:** the server uses `cors({ origin: true })`, so browser calls from your static site’s origin to the API are allowed.
 
-**Local dev is unchanged:** leave `VITE_API_BASE_URL` unset so the app keeps using `/api` and the Vite dev proxy.
+**Local dev:** the Vite dev server proxies `/api` to the API (see `client/vite.config.ts`).
 
 ## HTTP API (for integrations)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | JSON: `{ ok, model }` |
-| `POST` | `/api/process/stream` | Body: `{ "videoUrl": "<youtube url or id>" , "geminiApiKey": "<optional>" }`. Returns **SSE**: `init`, `message` (summary rows), `done`, or `error`. Send header `X-Request-Id` to correlate with stop. |
+| `POST` | `/api/process/stream` | Body: `{ "videoUrl", "geminiApiKey" }`. **Mock:** `"videoUrl": ""` and `"geminiApiKey": "54321"` (body only) streams sample dialogue without Gemini/YouTube. Otherwise a real URL + API key (or server `GEMINI_API_KEY`). **SSE:** `init`, `message`, `done`, or `error`. Header `X-Request-Id` for stop. |
 | `POST` | `/api/process/stop` | Body: `{ "requestId": "<same as X-Request-Id>" }` — stops the stream server-side when the client disconnects or user clicks Stop. |
 
 ## Download a transcript (CLI)

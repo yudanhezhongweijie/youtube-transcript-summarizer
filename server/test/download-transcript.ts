@@ -5,15 +5,12 @@
  */
 
 import { writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { parseArgs } from "node:util";
 
 import type { TranscriptResponse } from "youtube-transcript";
 
-/** CJS entry — Node ESM often lacks named exports for this package. */
-const require = createRequire(import.meta.url);
-const { fetchTranscript } =
-  require("youtube-transcript") as typeof import("youtube-transcript");
+/** Same ESM entry as the server — avoids broken `main` (CJS in a `"type":"module"` package). */
+const YT_ESM = "youtube-transcript/dist/youtube-transcript.esm.js" as const;
 
 function render(segments: TranscriptResponse[]): { body: string; ext: string } {
   return {
@@ -50,6 +47,8 @@ async function main(): Promise<void> {
     );
     process.exit(values.help ? 0 : 1);
   }
+
+  const { fetchTranscript } = (await import(YT_ESM)) as typeof import("youtube-transcript");
 
   const segments = await fetchTranscript(values.url.trim(), {
     ...(values.lang?.trim() ? { lang: values.lang.trim() } : {}),

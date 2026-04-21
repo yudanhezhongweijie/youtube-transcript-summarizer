@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ChatMessage, ErrorBody, ProcessResponse } from "./types";
+import { apiUrl } from "./apiBase";
 import { consumeProcessSseStream } from "./processStream";
 import "./app.css";
-
-const STREAM_URL = "/api/process/stream";
 
 // identifiers for section breaks
 const TOPIC_SPEAKER = "BREAK";
@@ -55,7 +54,7 @@ export default function App() {
     setGenerationStopped(true);
 
     if (rid) {
-      void fetch("/api/process/stop", {
+      void fetch(apiUrl("/api/process/stop"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId: rid }),
@@ -85,7 +84,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      const res = await fetch(STREAM_URL, {
+      const res = await fetch(apiUrl("/api/process/stream"), {
         method: "POST",
         signal,
         headers: {
@@ -155,8 +154,8 @@ export default function App() {
       <p style={{ fontSize: "0.9rem", opacity: 0.85 }}>
         <strong>Live:</strong> with a URL and API key, the server streams raw captions as one &quot;Transcript&quot; message.
         <br />
-        <strong> Mock:</strong> if the URL and key are missing (or the id cannot be parsed), the server streams a{" "}
-        <em>sample Gemini-style summary</em>.
+        <strong> Mock:</strong> leave the URL empty and set the key to <code>54321</code> — the server streams a sample
+        dialogue (no Gemini, no YouTube).
       </p>
       <form onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
         <label>
@@ -165,7 +164,7 @@ export default function App() {
             style={{ width: "100%", boxSizing: "border-box" }}
             value={videoUrl}
             onChange={(e) => setVideoUrl(e.target.value)}
-            placeholder="https://www.youtube.com/watch?v=..."
+            placeholder="Empty + key 54321 → mock stream"
           />
         </label>
         <label>
@@ -176,7 +175,7 @@ export default function App() {
             autoComplete="off"
             value={geminiApiKey}
             onChange={(e) => setGeminiApiKey(e.target.value)}
-            placeholder="API key"
+            placeholder="54321 for mock, or your real key"
           />
         </label>
         {loading ? (
